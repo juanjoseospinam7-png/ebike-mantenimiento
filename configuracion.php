@@ -1,101 +1,44 @@
 <?php
+declare(strict_types=1);
 session_start();
 require_once __DIR__ . '/config/helpers.php';
 require_admin();
-
-$pageTitle = 'Configuración del Taller';
 $pdo = db();
 $cfg = get_workshop_config($pdo);
-
+$pageTitle = 'Configuración de la empresa';
 include __DIR__ . '/partials/header.php';
 ?>
-
-<div class="hero">
-  <div>
-    <span class="eyebrow">ADMINISTRACIÓN · SISTEMA EMS</span>
-    <h1>Configuración General del Taller</h1>
-    <p>Personaliza los datos comerciales, fiscales, políticas de garantía y genera copias de seguridad de la base de datos.</p>
-  </div>
-  <a class="btn btn-primary" href="api/backup.php">
-    <span class="material-symbols-outlined">backup</span>Descargar Copia de Seguridad SQL
-  </a>
-</div>
-
-<div class="grid-main" style="grid-template-columns:minmax(0,1fr) 360px">
-  <section class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>Datos Comerciales y Fiscales</h2>
-        <p>Esta información se refleja en las órdenes de servicio, comprobantes y el portal de clientes.</p>
-      </div>
+<section class="page-intro"><span class="eyebrow">ADMINISTRACIÓN · IDENTIDAD Y POLÍTICAS</span><h1>Configuración de la empresa</h1><p>Estos datos aparecen en tickets, órdenes internas, portales y políticas de alquiler.</p></section>
+<div class="grid-main">
+<section class="panel">
+  <div class="panel-head"><h2>Datos generales</h2></div>
+  <form method="post" action="api/configuracion.php" class="stack-form" style="padding:20px">
+    <?= csrf_field() ?>
+    <div class="form-grid">
+      <label>Nombre comercial *<input class="input" name="nombre_empresa" value="<?= e($cfg['nombre_empresa'] ?? '') ?>" required></label>
+      <label>NIT / Identificación<input class="input" name="nit" value="<?= e($cfg['nit'] ?? '') ?>"></label>
+      <label>Teléfono / WhatsApp<input class="input" name="telefono" value="<?= e($cfg['telefono'] ?? '') ?>"></label>
+      <label>Correo oficial<input class="input" type="email" name="email" value="<?= e($cfg['email'] ?? '') ?>"></label>
+      <label class="field full">Dirección<input class="input" name="direccion" value="<?= e($cfg['direccion'] ?? '') ?>"></label>
+      <label>Horario de atención<input class="input" name="horario_atencion" value="<?= e($cfg['horario_atencion'] ?? '') ?>"></label>
+      <label>Depósito de garantía (COP)<input class="input" type="number" min="0" name="deposito_garantia" value="<?= e($cfg['deposito_garantia'] ?? '0') ?>"></label>
+      <label>Garantía de mano de obra (días)<input class="input" type="number" min="0" name="garantia_dias" value="<?= e($cfg['garantia_dias'] ?? '90') ?>"></label>
+      <label class="field full">Política de alquiler<textarea class="input" name="politica_alquiler" rows="3"><?= e($cfg['politica_alquiler'] ?? '') ?></textarea></label>
     </div>
-    <form method="post" action="api/configuracion.php" style="padding:22px">
-      <?= csrf_field() ?>
-      <div class="form-grid">
-        <div class="field full">
-          <label>Nombre Comercial del Taller <span class="required">*</span></label>
-          <input class="input" name="nombre_taller" value="<?= e($cfg['nombre_taller'] ?? 'eBike Maintenance System (EMS)') ?>" required>
-        </div>
-
-        <div class="field">
-          <label>NIT / Identificación Tributaria</label>
-          <input class="input" name="nit" value="<?= e($cfg['nit'] ?? '901.845.123-4') ?>">
-        </div>
-
-        <div class="field">
-          <label>Teléfono de Atención / WhatsApp</label>
-          <input class="input" name="telefono" value="<?= e($cfg['telefono'] ?? '+57 310 987 6543') ?>">
-        </div>
-
-        <div class="field">
-          <label>Correo Electrónico Oficial</label>
-          <input class="input" type="email" name="email" value="<?= e($cfg['email'] ?? 'contacto@ebiketaller.com') ?>">
-        </div>
-
-        <div class="field">
-          <label>Garantía Estándar en Mano de Obra (Días)</label>
-          <input class="input" type="number" min="0" name="garantia_dias" value="<?= e($cfg['garantia_dias'] ?? '90') ?>">
-        </div>
-
-        <div class="field full">
-          <label>Dirección Física del Taller</label>
-          <input class="input" name="direccion" value="<?= e($cfg['direccion'] ?? 'Cra 45 # 128 - 20, Bogotá, Colombia') ?>">
-        </div>
-      </div>
-
-      <div style="margin-top:20px;display:flex;justify-content:flex-end">
-        <button class="btn btn-primary" type="submit">
-          <span class="material-symbols-outlined">save</span>Guardar Configuración
-        </button>
-      </div>
-    </form>
-  </section>
-
-  <div style="display:grid;gap:20px;align-content:start">
-    <section class="panel">
-      <div class="panel-head">
-        <h3>Copia de Seguridad (Backup)</h3>
-      </div>
-      <div style="padding:20px;font-size:13px;line-height:1.6">
-        <p style="margin-top:0">Exporta en un solo clic toda la estructura y datos de la base de datos <code>ebike_taller</code> en un archivo <code>.sql</code> listo para importar en phpMyAdmin o en otro servidor.</p>
-        <a class="btn btn-primary" href="api/backup.php" style="width:100%;justify-content:center">
-          <span class="material-symbols-outlined">download</span>Descargar Backup Ahora
-        </a>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h3>Información del Entorno</h3>
-      </div>
-      <div style="padding:18px;font-size:12px;line-height:1.8">
-        <div><b>Versión PHP:</b> <?= phpversion() ?></div>
-        <div><b>Motor BD:</b> MySQL / MariaDB (PDO)</div>
-        <div><b>Moneda del Sistema:</b> Pesos Colombianos (COP)</div>
-        <div><b>Servidor Web:</b> <?= e($_SERVER['SERVER_SOFTWARE'] ?? 'Apache') ?></div>
-      </div>
-    </section>
-  </div>
+    <div class="modal-foot"><button class="btn btn-primary" type="submit">Guardar configuración</button></div>
+  </form>
+</section>
+<div class="side-stack">
+  <section class="panel"><div class="panel-head"><h2>Copia de seguridad</h2></div><div class="panel-body">
+    <p class="muted">Exporta la estructura y los datos de <code>ebike_taller</code> en un archivo SQL para importar en phpMyAdmin.</p>
+    <a class="btn btn-primary btn-block" href="api/backup.php"><span class="material-symbols-outlined">backup</span>Descargar backup</a>
+  </div></section>
+  <section class="panel"><div class="panel-head"><h2>Entorno</h2></div><div class="panel-body env-info">
+    <div><span>PHP</span><strong><?= e(phpversion()) ?></strong></div>
+    <div><span>Motor</span><strong>MySQL / MariaDB (PDO)</strong></div>
+    <div><span>Moneda</span><strong>COP</strong></div>
+    <div><span>Servidor</span><strong><?= e($_SERVER['SERVER_SOFTWARE'] ?? 'Apache') ?></strong></div>
+  </div></section>
 </div>
-
+</div>
 <?php include __DIR__ . '/partials/footer.php'; ?>

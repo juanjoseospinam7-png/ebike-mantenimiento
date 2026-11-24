@@ -1,240 +1,122 @@
 <?php
+declare(strict_types=1);
 session_start();
 require_once __DIR__ . '/config/helpers.php';
 require_client();
-
-$pageTitle = 'Mi Panel de Cliente';
 $pdo = db();
-$userId = (int)current_user()['id'];
-$userPhone = current_user()['telefono'] ?? '';
-$userName = current_user()['nombre'] ?? '';
 
-// Obtener bicicletas del cliente
-$stmtBikes = $pdo->prepare("SELECT * FROM bicicletas WHERE id_usuario = ? OR (cliente = ? AND cliente IS NOT NULL AND cliente <> '') ORDER BY id_bicicleta DESC");
-$stmtBikes->execute([$userId, $userName]);
-$bikes = $stmtBikes->fetchAll();
+$q = trim((string)($_GET['q'] ?? ''));
+$tipo = trim((string)($_GET['tipo'] ?? ''));
+$autonomia = (int)($_GET['autonomia'] ?? 0);
+$precioMax = (float)($_GET['precio'] ?? 0);
+$caracteristica = trim((string)($_GET['caracteristica'] ?? ''));
+$soloDisponibles = ($_GET['disp'] ?? '1') === '1';
 
-// Obtener reportes y solicitudes de servicio del cliente
-$stmtReports = $pdo->prepare("
-    SELECT r.*, b.codigo, b.modelo, b.marca, b.tipo_bicicleta,
-           e.nombre AS nombre_tecnico,
-           m.id_manten, m.costo, m.mano_obra, m.total_repuestos, m.diagnostico AS diag_manten,
-           m.trabajos_realizados, m.observaciones AS obs_manten, m.estado AS estado_manten,
-           m.estado_pago, m.metodo_pago, m.fecha_salida
-    FROM reportes_clientes r
-    LEFT JOIN bicicletas b ON b.id_bicicleta = r.id_bicicleta
-    LEFT JOIN empleados e ON e.id_empleado = r.id_tecnico
-    LEFT JOIN mantenimientos m ON m.id_manten = r.id_mantenimiento
-    WHERE r.id_cliente = ? OR r.nombre_cliente = ?
-    ORDER BY r.id_reporte DESC
-");
-$stmtReports->execute([$userId, $userName]);
-$reports = $stmtReports->fetchAll();
+$where = ['1=1'];
+$params = [];
+if ($q !== '') { $where[] = '(b.nombre LIKE ? OR b.modelo LIKE ? OR b.marca LIKE ? OR b.codigo LIKE ?)'; $v = "%$q%"; array_push($params, $v, $v, $v, $v); }
+if ($tipo !== '') { $where[] = 'b.tipo_bicicleta = ?'; $params[] = $tipo; }
+if ($autonomia > 0) { $where[] = 'b.autonomia_km >= ?'; $params[] = $autonomia; }
+if ($precioMax > 0) { $where[] = 'b.precio_hora <= ?'; $params[] = $precioMax; }
+if ($caracteristica !== '') { $where[] = 'b.caracteristicas LIKE ?'; $params[] = "%$caracteristica%"; }
+if ($soloDisponibles) { $where[] = "b.activa = 1 AND b.estado_operativo IN ('disponible','reservada') AND b.nivel_bateria >= 15"; }
 
-$totalBikes = count($bikes);
-$activos = 0;
-$listos = 0;
-foreach ($reports as $rp) {
-    $st = mb_strtolower($rp['estado_manten'] ?: $rp['estado']);
-    if (in_array($st, ['reparado', 'entregado', 'completado', 'finalizado'])) {
-        $listos++;
-    } elseif ($st !== 'cancelado') {
-        $activos++;
-    }
-}
+$stmt = $pdo->prepare('SELECT * FROM bicicletas b WHERE ' . implode(' AND ', $where) . ' ORDER BY b.estado_operativo, b.precio_hora ASC, b.id_bicicleta');
+$stmt->execute($params);
+$bikes = $stmt->fetchAll();
 
+$tipos = $pdo->query("SELECT DISTINCT tipo_bicicleta FROM bicicletas WHERE tipo_bicicleta IS NOT NULL ORDER BY tipo_bicicleta")->fetchAll(PDO::FETCH_COLUMN);
+$pageTitle = 'Explorar eBikes';
 include __DIR__ . '/partials/header.php';
 ?>
-
-<div class="client-hero">
-  <div>
-    <span class="eyebrow" style="color:#b8f2d5">PORTAL DE SERVICIOS E-BIKE</span>
-    <h1>¡Hola, <?= e($userName) ?>!</h1>
-    <p>Gestiona tus bicicletas eléctricas, solicita mantenimientos y consulta presupuestos y avances en vivo.</p>
-  </div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap">
-    <a class="btn btn-primary" href="reportar.php" style="background:#fff;color:var(--green-900)">
-      <span class="material-symbols-outlined">add_alert</span>Reportar Falla
-    </a>
-    <a class="btn btn-light" href="mis_bicicletas.php" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.3)">
-      <span class="material-symbols-outlined">pedal_bike</span>Mis Bicicletas
-    </a>
-  </div>
-</div>
-
-<div class="kpis">
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Mis Bicicletas</div>
-        <div class="kpi-value"><?= $totalBikes ?></div>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">electric_bike</span></div>
+<section class="shop-hero">
+    <div class="shop-hero-copy">
+        <span class="eyebrow">ALQUILER DE BICICLETAS ELÉCTRICAS</span>
+        <h1>Tu próxima salida empieza aquí.</h1>
+        <p>Explora nuestra flota, compara autonomía y precios, y reserva en minutos. Sin papeleo, sin complicaciones.</p>
     </div>
-  </div>
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">En Mantenimiento</div>
-        <div class="kpi-value"><?= $activos ?></div>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">construction</span></div>
-    </div>
-  </div>
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Listas / Reparadas</div>
-        <div class="kpi-value"><?= $listos ?></div>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">task_alt</span></div>
-    </div>
-  </div>
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Rastreo Rápido</div>
-        <div class="kpi-value" style="font-size:16px;margin-top:12px">
-          <a href="seguimiento.php" style="color:var(--green);display:flex;align-items:center;gap:4px">
-            Consultar <span class="material-symbols-outlined" style="font-size:18px">arrow_forward</span>
-          </a>
-        </div>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">qr_code_scanner</span></div>
-    </div>
-  </div>
-</div>
-
-<!-- Reportes y Solicitudes de Servicio -->
-<section class="panel" style="margin-bottom:24px">
-  <div class="panel-head">
-    <div>
-      <h2>Historial de Solicitudes y Mantenimientos</h2>
-      <p>Revisa el estado actual, diagnóstico técnico, presupuesto y observaciones de tus eBikes.</p>
-    </div>
-    <a class="btn btn-primary btn-sm" href="reportar.php">
-      <span class="material-symbols-outlined">add</span>Nueva solicitud
-    </a>
-  </div>
-
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Seguimiento</th>
-          <th>Bicicleta</th>
-          <th>Falla / Categoría</th>
-          <th>Fecha Reporte</th>
-          <th>Estado del Servicio</th>
-          <th>Técnico Asignado</th>
-          <th>Presupuesto (COP)</th>
-          <th>Detalles</th>
-        </tr>
-      </thead>
-      <tbody>
-      <?php foreach ($reports as $r): ?>
-        <?php 
-          $currentStatus = $r['estado_manten'] ?: $r['estado'];
-          $isReady = in_array(mb_strtolower($currentStatus), ['reparado', 'completado', 'listo', 'entregado']);
-        ?>
-        <tr class="<?= $isReady ? 'ready-row' : '' ?>">
-          <td>
-            <a href="seguimiento.php?codigo=<?= urlencode($r['codigo_seguimiento'] ?: ('REP-'.$r['id_reporte'])) ?>" style="font-family:monospace;font-weight:700;color:var(--green-700);text-decoration:underline">
-              <?= e($r['codigo_seguimiento'] ?: ('REP-'.$r['id_reporte'])) ?>
-            </a>
-          </td>
-          <td>
-            <strong><?= e($r['codigo'] ?: ($r['codigo_bici'] ?: 'eBike')) ?></strong><br>
-            <span class="muted"><?= e($r['modelo'] ?: '') ?></span>
-          </td>
-          <td>
-            <span class="badge badge-neutral"><?= e($r['categoria_problema'] ?: 'General') ?></span><br>
-            <span style="font-size:12px;color:var(--ink)"><?= e(mb_strimwidth($r['descripcion'], 0, 45, '...')) ?></span>
-          </td>
-          <td><?= format_date($r['creado_en']) ?></td>
-          <td>
-            <span class="badge badge-<?= status_class($currentStatus) ?>">
-              <?= e($currentStatus) ?>
-            </span>
-            <?php if ($isReady): ?>
-              <br><small style="color:var(--green-700);font-weight:700">✓ ¡Lista para recoger!</small>
-            <?php endif; ?>
-          </td>
-          <td><?= e($r['nombre_tecnico'] ?: 'Por asignar') ?></td>
-          <td>
-            <?php if (!empty($r['costo']) && (float)$r['costo'] > 0): ?>
-              <b><?= money($r['costo']) ?></b>
-              <br><span class="muted" style="font-size:10px"><?= ($r['estado_pago'] === 'pagado') ? 'Pagado' : 'Pendiente de pago' ?></span>
-            <?php else: ?>
-              <span class="muted">En cotización</span>
-            <?php endif; ?>
-          </td>
-          <td>
-            <a class="btn btn-light btn-sm" href="seguimiento.php?codigo=<?= urlencode($r['codigo_seguimiento'] ?: ('REP-'.$r['id_reporte'])) ?>">
-              <span class="material-symbols-outlined">visibility</span>Ver
-            </a>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-      <?php if (!$reports): ?>
-        <tr>
-          <td colspan="8" class="empty">
-            <span class="material-symbols-outlined">build_circle</span><br>
-            Aún no has registrado ninguna solicitud de mantenimiento.<br>
-            <a class="btn btn-primary btn-sm" href="reportar.php" style="margin-top:10px">Reportar una falla ahora</a>
-          </td>
-        </tr>
-      <?php endif; ?>
-      </tbody>
-    </table>
-  </div>
+    <form class="shop-search" method="get" action="cliente.php">
+        <span class="material-symbols-outlined">search</span>
+        <input type="search" name="q" value="<?= e($q) ?>" placeholder="Busca por modelo, tipo o código (EBK-…)">
+        <button class="btn btn-primary" type="submit">Buscar</button>
+    </form>
 </section>
 
-<!-- Mis Bicicletas Registradas -->
-<section class="panel">
-  <div class="panel-head">
-    <div>
-      <h2>Mis Bicicletas Eléctricas</h2>
-      <p>Registra y mantén al día la información técnica de tus vehículos.</p>
-    </div>
-    <a class="btn btn-light btn-sm" href="mis_bicicletas.php">
-      <span class="material-symbols-outlined">add</span>Registrar otra bicicleta
-    </a>
-  </div>
+<form class="filter-bar" method="get" action="cliente.php">
+    <input type="hidden" name="q" value="<?= e($q) ?>">
+    <label>Tipo
+        <select class="input" name="tipo">
+            <option value="">Todos los tipos</option>
+            <?php foreach ($tipos as $t): ?>
+                <option value="<?= e($t) ?>" <?= $tipo === $t ? 'selected' : '' ?>><?= e($t) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </label>
+    <label>Autonomía mínima
+        <select class="input" name="autonomia">
+            <option value="0">Cualquiera</option>
+            <option value="30" <?= $autonomia === 30 ? 'selected' : '' ?>>30+ km</option>
+            <option value="50" <?= $autonomia === 50 ? 'selected' : '' ?>>50+ km</option>
+            <option value="65" <?= $autonomia === 65 ? 'selected' : '' ?>>65+ km</option>
+        </select>
+    </label>
+    <label>Precio hora hasta
+        <select class="input" name="precio">
+            <option value="0">Sin límite</option>
+            <option value="15000" <?= $precioMax == 15000 ? 'selected' : '' ?>>$ 15.000</option>
+            <option value="20000" <?= $precioMax == 20000 ? 'selected' : '' ?>>$ 20.000</option>
+            <option value="25000" <?= $precioMax == 25000 ? 'selected' : '' ?>>$ 25.000</option>
+        </select>
+    </label>
+    <label>Característica
+        <input class="input" name="caracteristica" value="<?= e($caracteristica) ?>" placeholder="Ej. frenos, plegable, USB">
+    </label>
+    <label class="check-field"><input type="checkbox" name="disp" value="1" <?= $soloDisponibles ? 'checked' : '' ?>> Solo disponibles</label>
+    <button class="btn btn-soft" type="submit"><span class="material-symbols-outlined">filter_alt</span>Filtrar</button>
+    <a class="btn btn-ghost" href="cliente.php">Limpiar</a>
+</form>
 
-  <div style="padding:20px">
-    <div class="bike-grid">
-      <?php foreach ($bikes as $bk): ?>
-        <div class="bike-card">
-          <div>
-            <div class="bike-card-head">
-              <div>
-                <strong style="font-size:16px;color:var(--ink)"><?= e($bk['codigo']) ?></strong>
-                <div class="muted"><?= e($bk['marca'] . ' ' . $bk['modelo']) ?></div>
-              </div>
-              <span class="bike-card-badge"><?= e($bk['tipo_bicicleta'] ?: 'Urbana') ?></span>
-            </div>
-            <div class="bike-card-body">
-              <p><b>Color:</b> <?= e($bk['color'] ?: 'No especificado') ?></p>
-              <p><b>N° Serie / Chasis:</b> <?= e($bk['numero_serie'] ?: 'No registrado') ?></p>
-              <p><b>Estado:</b> <span class="badge badge-<?= $bk['activa'] ? 'success' : 'danger' ?>"><?= $bk['activa'] ? 'Operativa' : 'Inactiva' ?></span></p>
-            </div>
-          </div>
-          <div style="margin-top:14px;display:flex;gap:8px">
-            <a class="btn btn-primary btn-sm" href="reportar.php?id_bicicleta=<?= (int)$bk['id_bicicleta'] ?>" style="flex:1;justify-content:center">
-              <span class="material-symbols-outlined">build</span>Reportar falla
+<div class="section-head">
+    <div><h2>Nuestra flota</h2><p><?= count($bikes) ?> eBikes encontradas</p></div>
+</div>
+
+<div class="catalog-grid">
+    <?php foreach ($bikes as $b): ?>
+        <?php $rentable = (int)$b['activa'] === 1 && in_array($b['estado_operativo'], ['disponible', 'reservada'], true) && (int)$b['nivel_bateria'] >= 15; ?>
+        <article class="product-card">
+            <a class="product-photo <?= $b['foto'] ? '' : 'is-placeholder' ?>" href="bicicleta_detalle.php?id=<?= (int)$b['id_bicicleta'] ?>">
+                <?php if ($b['foto'] && is_file(__DIR__ . '/' . $b['foto'])): ?>
+                    <img src="<?= e($b['foto']) ?>" alt="<?= e($b['nombre'] ?: $b['modelo']) ?>">
+                <?php else: ?>
+                    <span class="material-symbols-outlined">electric_bike</span>
+                <?php endif; ?>
+                <span class="product-code"><?= e($b['codigo']) ?></span>
             </a>
-          </div>
-        </div>
-      <?php endforeach; ?>
-      <?php if (!$bikes): ?>
-        <div class="empty" style="grid-column:1/-1;padding:30px">
-          <p>No tienes bicicletas asociadas a tu cuenta aún.</p>
-          <a class="btn btn-primary" href="mis_bicicletas.php">Registrar mi primera eBike</a>
-        </div>
-      <?php endif; ?>
-    </div>
-  </div>
-</section>
-
+            <div class="product-body">
+                <div class="product-title-row">
+                    <h3><?= e($b['nombre'] ?: $b['modelo']) ?></h3>
+                    <span class="badge badge-<?= status_class($b['estado_operativo']) ?>"><?= e(bike_state_label($b['estado_operativo'])) ?></span>
+                </div>
+                <p class="product-model"><?= e($b['marca']) ?> · <?= e($b['modelo']) ?> · <?= e($b['tipo_bicicleta']) ?></p>
+                <div class="product-chips">
+                    <span><span class="material-symbols-outlined">route</span><?= (int)$b['autonomia_km'] ?> km</span>
+                    <span><span class="material-symbols-outlined">battery_charging_full</span><?= (int)$b['nivel_bateria'] ?>%</span>
+                    <span><span class="material-symbols-outlined">bolt</span><?= (int)$b['capacidad_bateria_wh'] ?> Wh</span>
+                </div>
+                <p class="product-features"><?= e(mb_strimwidth((string)($b['caracteristicas'] ?: $b['descripcion'] ?: 'Bicicleta eléctrica de la flota eBike'), 0, 90, '…')) ?></p>
+                <div class="product-price">
+                    <div><small>Por hora</small><strong><?= e(money($b['precio_hora'])) ?></strong></div>
+                    <div><small>Por día</small><strong><?= e(money($b['precio_dia'])) ?></strong></div>
+                </div>
+                <a class="btn btn-primary btn-block" href="bicicleta_detalle.php?id=<?= (int)$b['id_bicicleta'] ?>">
+                    <span class="material-symbols-outlined"><?= $rentable ? 'arrow_forward' : 'info' ?></span>
+                    <?= $rentable ? 'Consultar y alquilar' : 'Ver detalles' ?>
+                </a>
+            </div>
+        </article>
+    <?php endforeach; ?>
+    <?php if (!$bikes): ?>
+        <div class="empty full"><span class="material-symbols-outlined">search_off</span><h3>No encontramos eBikes con esos filtros</h3><p>Prueba ampliar la búsqueda o quitar algún filtro.</p></div>
+    <?php endif; ?>
+</div>
 <?php include __DIR__ . '/partials/footer.php'; ?>

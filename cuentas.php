@@ -45,8 +45,8 @@ include __DIR__ . '/partials/header.php';
 <div class="hero">
   <div>
     <span class="eyebrow">ADMINISTRACIÓN · CONTROL DE ACCESO</span>
-    <h1>Gestión de Usuarios y Personal</h1>
-    <p>Crea y administra cuentas de Administradores, Mecánicos técnicos y Clientes con control de permisos y contraseñas.</p>
+    <h1>Usuarios y accesos</h1>
+    <p>Administra administradores, equipo técnico de mantenimiento y clientes de la flota de alquiler.</p>
   </div>
   <button class="btn btn-primary" type="button" onclick="openNewUserModal()">
     <span class="material-symbols-outlined">person_add</span>Crear Nuevo Usuario
@@ -67,7 +67,7 @@ include __DIR__ . '/partials/header.php';
   <div class="card kpi">
     <div class="kpi-top">
       <div>
-        <div class="kpi-label">Mecánicos del Taller</div>
+        <div class="kpi-label">Equipo técnico</div>
         <div class="kpi-value"><?= $countMecanicos ?></div>
       </div>
       <div class="kpi-icon"><span class="material-symbols-outlined">engineering</span></div>
@@ -205,9 +205,9 @@ include __DIR__ . '/partials/header.php';
           <div class="field full">
             <label>Rol de Usuario <span class="required">*</span></label>
             <select class="select" name="rol" id="newUserRol" onchange="toggleRolFields()" required>
-              <option value="mecanico">Mecánico de Taller (Acceso a Reparaciones y Diagnósticos)</option>
-              <option value="admin">Administrador (Acceso Total: Cuentas, Contabilidad, Todo)</option>
-              <option value="cliente">Cliente (Portal para Solicitar Servicios y Ver Bicicletas)</option>
+              <option value="mecanico">Mecánico (Incidencias de la flota e intervenciones)</option>
+              <option value="admin">Administrador (Alquileres, flota, finanzas y accesos)</option>
+              <option value="cliente">Cliente (Catálogo, alquileres y tickets)</option>
             </select>
             <small class="muted">Solamente un administrador autorizado puede crear cuentas.</small>
           </div>

@@ -1,348 +1,138 @@
 <?php
+declare(strict_types=1);
 session_start();
 require_once __DIR__ . '/config/helpers.php';
-require_login();
-
-// Si el usuario logueado es cliente, redirigir a su portal
-if (is_client()) redirect('cliente.php');
-if (is_mechanic()) redirect('mecanico.php');
-
-$pageTitle = 'Dashboard General';
+require_admin();
 $pdo = db();
 
-// Estadísticas Reales de MySQL
-$totalBikes = (int)$pdo->query("SELECT COUNT(*) FROM bicicletas")->fetchColumn();
-$reportesRecibidos = (int)$pdo->query("SELECT COUNT(*) FROM reportes_clientes")->fetchColumn();
-$reportesPendientes = (int)$pdo->query("SELECT COUNT(*) FROM reportes_clientes WHERE estado IN ('Recibido','Pendiente de revisión','pendiente')")->fetchColumn();
+$row = $pdo->query(
+    "SELECT
+       COUNT(*) AS total_bicis,
+       SUM(estado_operativo='disponible') AS disponibles,
+       SUM(estado_operativo IN ('alquilada','reservada')) AS ocupadas,
+       SUM(estado_operativo IN ('en_mantenimiento','en_revision','fuera_de_servicio')) AS mantenimiento,
+       SUM(nivel_bateria < 20) AS bateria_baja
+     FROM bicicletas"
+)->fetch();
+$bicis = $row;
+$row = $pdo->query(
+    "SELECT
+       COUNT(*) AS total,
+       SUM(estado IN ('solicitud_recibida','confirmado','asignado','activo','finalizacion_solicitada')) AS activos,
+       SUM(estado='activo') AS en_curso,
+       SUM(estado='finalizado') AS finalizados,
+       COALESCE(SUM(CASE WHEN estado_pago='confirmado' THEN precio_total ELSE 0 END),0) AS ingresos
+     FROM alquileres"
+)->fetch();
+$alq = $row;
+$row = $pdo->query(
+    "SELECT
+       SUM(estado IN ('En espera','En investigación','En mantenimiento','En pruebas','Requiere nueva revisión')) AS pendientes,
+       SUM(estado='Terminado') AS por_validar,
+       SUM(estado='Cerrado') AS cerrados
+     FROM reportes_clientes"
+)->fetch();
+$rep = $row;
 
-$enReparacion = (int)$pdo->query("SELECT COUNT(*) FROM mantenimientos WHERE LOWER(COALESCE(estado,'')) IN ('en reparación','en reparacion','en diagnóstico','en diagnostico','en pruebas','en proceso')")->fetchColumn();
-$reparadas = (int)$pdo->query("SELECT COUNT(*) FROM mantenimientos WHERE LOWER(COALESCE(estado,'')) IN ('reparado','listo','completado','finalizado')")->fetchColumn();
-$entregadas = (int)$pdo->query("SELECT COUNT(*) FROM mantenimientos WHERE LOWER(COALESCE(estado,'')) IN ('entregado')")->fetchColumn();
+$porEstado = $pdo->query("SELECT estado, COUNT(*) AS total FROM alquileres GROUP BY estado")->fetchAll(PDO::FETCH_KEY_PAIR);
+$ultimosAlq = $pdo->query(
+    "SELECT a.codigo_alquiler, a.estado, a.precio_total, a.fecha_inicio, b.codigo AS bici, u.nombre AS cliente
+     FROM alquileres a JOIN bicicletas b ON b.id_bicicleta=a.id_bicicleta
+     JOIN usuarios u ON u.id=a.id_cliente ORDER BY a.creado_en DESC LIMIT 6"
+)->fetchAll();
+$ultimosRep = $pdo->query(
+    "SELECT r.codigo_seguimiento, r.estado, r.categoria_problema, r.creado_en, b.codigo AS bici
+     FROM reportes_clientes r JOIN bicicletas b ON b.id_bicicleta=r.id_bicicleta
+     ORDER BY r.creado_en DESC LIMIT 6"
+)->fetchAll();
+$bateriaBaja = $pdo->query('SELECT codigo, modelo, nivel_bateria FROM bicicletas WHERE nivel_bateria < 20 ORDER BY nivel_bateria LIMIT 5')->fetchAll();
 
-$mecanicosActivos = (int)$pdo->query("SELECT COUNT(*) FROM empleados WHERE activo=1")->fetchColumn();
-$clientesRegistrados = (int)$pdo->query("SELECT COUNT(*) FROM usuarios WHERE rol='cliente'")->fetchColumn();
-
-$ingresosDia = (float)$pdo->query("SELECT COALESCE(SUM(costo),0) FROM mantenimientos WHERE DATE(fecha_ingreso)=CURDATE() AND estado<>'Cancelado'")->fetchColumn();
-$ingresosMes = (float)$pdo->query("SELECT COALESCE(SUM(costo),0) FROM mantenimientos WHERE MONTH(fecha_ingreso)=MONTH(CURDATE()) AND YEAR(fecha_ingreso)=YEAR(CURDATE()) AND estado<>'Cancelado'")->fetchColumn();
-$gastosMes = (float)$pdo->query("SELECT COALESCE(SUM(monto),0) FROM gastos WHERE MONTH(fecha)=MONTH(CURDATE()) AND YEAR(fecha)=YEAR(CURDATE())")->fetchColumn();
-$utilidadMes = $ingresosMes - $gastosMes;
-
-$stockBajo = (int)$pdo->query("SELECT COUNT(*) FROM inventario_costos_arreglos WHERE cantidad_disponible <= stock_minimo AND activo=1")->fetchColumn();
-
-// Últimos reportes recibidos
-$recentReports = $pdo->query("
-    SELECT r.*, b.codigo, b.modelo, e.nombre AS tecnico
-    FROM reportes_clientes r
-    LEFT JOIN bicicletas b ON b.id_bicicleta = r.id_bicicleta
-    LEFT JOIN empleados e ON e.id_empleado = r.id_tecnico
-    ORDER BY r.id_reporte DESC
-    LIMIT 6
-")->fetchAll();
-
-// Últimos mantenimientos
-$recent = $pdo->query("
-    SELECT m.*, b.codigo, b.modelo, e.nombre AS tecnico, r.codigo_seguimiento
-    FROM mantenimientos m
-    LEFT JOIN bicicletas b ON b.id_bicicleta = m.id_bicicleta
-    LEFT JOIN empleados e ON e.id_empleado = m.id_tecnico
-    LEFT JOIN reportes_clientes r ON r.id_reporte = m.id_reporte_cliente
-    ORDER BY m.id_manten DESC
-    LIMIT 7
-")->fetchAll();
-
-// Datos para Gráfico de Distribución de Estados
-$statusCounts = $pdo->query("
-    SELECT estado, COUNT(*) as cnt 
-    FROM mantenimientos 
-    WHERE estado IS NOT NULL AND estado <> ''
-    GROUP BY estado
-")->fetchAll();
-
-$chartLabels = [];
-$chartCounts = [];
-foreach ($statusCounts as $sc) {
-    $chartLabels[] = $sc['estado'];
-    $chartCounts[] = (int)$sc['cnt'];
-}
-if (!$chartLabels) {
-    $chartLabels = ['Sin mantenimientos'];
-    $chartCounts = [0];
-}
-
+$pageTitle = 'Centro de operaciones';
 include __DIR__ . '/partials/header.php';
 ?>
-
-<div class="hero">
-  <div>
-    <span class="eyebrow">PANEL ADMINISTRATIVO · E-BIKE MAINTENANCE SYSTEM</span>
-    <h1>Control Maestro del Taller</h1>
-    <p>Supervisión en tiempo real de operaciones técnicas, recepción de reportes, inventario y métricas financieras.</p>
-  </div>
-  <div class="actions">
-    <a class="btn btn-light" href="reportes_admin.php">
-      <span class="material-symbols-outlined">assignment_late</span>Ver Reportes
-      <?php if ($reportesPendientes > 0): ?>
-        <span class="badge badge-warning" style="margin-left:4px"><?= $reportesPendientes ?></span>
-      <?php endif; ?>
-    </a>
-    <a class="btn btn-light" href="contabilidad.php">
-      <span class="material-symbols-outlined">account_balance_wallet</span>Contabilidad
-    </a>
-    <a class="btn btn-primary" href="mantenimientos.php?nuevo=1">
-      <span class="material-symbols-outlined">add</span>Nueva orden
-    </a>
-  </div>
-</div>
-
-<!-- Cuadrícula Principal de KPIs Reales -->
-<div class="kpis" style="grid-template-columns:repeat(auto-fit, minmax(220px, 1fr))">
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Ingresos del Mes</div>
-        <div class="kpi-value" style="font-size:22px;color:var(--green-800)"><?= money($ingresosMes) ?></div>
-        <small class="muted">Hoy: <?= money($ingresosDia) ?></small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">payments</span></div>
-    </div>
-  </div>
-
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Utilidad Neta Mes</div>
-        <div class="kpi-value" style="font-size:22px;color:<?= $utilidadMes >= 0 ? 'var(--green-700)' : 'var(--danger)' ?>"><?= money($utilidadMes) ?></div>
-        <small class="muted">Gastos mes: <?= money($gastosMes) ?></small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">account_balance</span></div>
-    </div>
-  </div>
-
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">En Reparación / Taller</div>
-        <div class="kpi-value" style="color:var(--info)"><?= $enReparacion ?></div>
-        <small class="muted">Reparadas: <?= $reparadas ?> · Entregadas: <?= $entregadas ?></small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">construction</span></div>
-    </div>
-  </div>
-
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Reportes de Clientes</div>
-        <div class="kpi-value" style="color:<?= $reportesPendientes > 0 ? 'var(--warning)' : 'inherit' ?>"><?= $reportesRecibidos ?></div>
-        <small class="muted"><?= $reportesPendientes ?> pendiente(s) de asignación</small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">support_agent</span></div>
-    </div>
-  </div>
-
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Flota de Bicicletas</div>
-        <div class="kpi-value"><?= $totalBikes ?></div>
-        <small class="muted">Clientes registrados: <?= $clientesRegistrados ?></small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">electric_bike</span></div>
-    </div>
-  </div>
-
-  <div class="card kpi">
-    <div class="kpi-top">
-      <div>
-        <div class="kpi-label">Mecánicos Activos</div>
-        <div class="kpi-value"><?= $mecanicosActivos ?></div>
-        <small class="muted">Alertas stock: <b style="color:<?= $stockBajo > 0 ? 'var(--danger)' : 'inherit' ?>"><?= $stockBajo ?></b></small>
-      </div>
-      <div class="kpi-icon"><span class="material-symbols-outlined">engineering</span></div>
-    </div>
-  </div>
-</div>
-
-<!-- Gráficos y Tablas Principales -->
-<div class="grid-main" style="grid-template-columns:minmax(0,1fr) 350px;margin-bottom:24px">
-  <section class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>Últimas Órdenes de Mantenimiento</h2>
-        <p>Órdenes registradas en la tabla <b>mantenimientos</b>.</p>
-      </div>
-      <a class="btn btn-light btn-sm" href="mantenimientos.php">Ver todas</a>
-    </div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Bicicleta</th>
-            <th>Técnico</th>
-            <th>Fecha Ingreso</th>
-            <th>Estado</th>
-            <th>Total Facturado</th>
-            <th>Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-        <?php foreach ($recent as $row): ?>
-          <tr>
-            <td class="id">#<?= e($row['id_manten']) ?></td>
-            <td>
-              <span class="bike-name"><?= e($row['codigo'] ?: 'Sin bici') ?></span><br>
-              <span class="muted"><?= e($row['modelo'] ?: '') ?></span>
-            </td>
-            <td><?= e($row['tecnico'] ?: 'ID '.$row['id_tecnico']) ?></td>
-            <td><?= format_date($row['fecha_ingreso']) ?></td>
-            <td>
-              <span class="badge badge-<?= status_class($row['estado']) ?>">
-                <?= e($row['estado'] ?: 'Recibido') ?>
-              </span>
-            </td>
-            <td><b><?= money($row['costo']) ?></b></td>
-            <td>
-              <a class="btn btn-light btn-sm" href="imprimir_orden.php?id=<?= (int)$row['id_manten'] ?>" target="_blank" title="Imprimir Orden">
-                <span class="material-symbols-outlined">print</span>
-              </a>
-            </td>
-          </tr>
-        <?php endforeach; ?>
-        <?php if (!$recent): ?>
-          <tr><td colspan="7" class="empty">No hay órdenes registradas aún.</td></tr>
-        <?php endif; ?>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- Gráfico de Estados y Resumen Operativo -->
-  <div class="side-stack">
-    <div class="panel">
-      <div class="panel-head">
-        <h3>Distribución por Estados</h3>
-      </div>
-      <div style="padding:16px;height:240px;display:flex;align-items:center;justify-content:center">
-        <canvas id="statusChart"></canvas>
-      </div>
-    </div>
-
-    <div class="panel quick">
-      <div class="panel-head" style="padding:0 0 10px;border:0">
-        <h3>Acciones Rápidas</h3>
-      </div>
-      <a class="quick-item" href="reportes_admin.php">
-        <div class="quick-icon"><span class="material-symbols-outlined">assignment_late</span></div>
-        <div>
-          <strong>Recepción de Bicicletas</strong>
-          <span>Asignar solicitudes de clientes</span>
-        </div>
-      </a>
-      <a class="quick-item" href="mantenimientos.php?nuevo=1">
-        <div class="quick-icon"><span class="material-symbols-outlined">add</span></div>
-        <div>
-          <strong>Nueva Orden de Trabajo</strong>
-          <span>Registrar mantenimiento manual</span>
-        </div>
-      </a>
-      <a class="quick-item" href="contabilidad.php">
-        <div class="quick-icon"><span class="material-symbols-outlined">account_balance_wallet</span></div>
-        <div>
-          <strong>Módulo de Contabilidad</strong>
-          <span>Ingresos, gastos y utilidades</span>
-        </div>
-      </a>
-      <a class="quick-item" href="cuentas.php">
-        <div class="quick-icon"><span class="material-symbols-outlined">manage_accounts</span></div>
-        <div>
-          <strong>Gestión de Personal</strong>
-          <span>Crear administradores y mecánicos</span>
-        </div>
-      </a>
-    </div>
-  </div>
-</div>
-
-<!-- Últimos Reportes Recibidos desde Clientes -->
-<section class="panel">
-  <div class="panel-head">
-    <div>
-      <h2>Últimas Solicitudes Recibidas de Clientes</h2>
-      <p>Revisión y asignación inmediata para agilizar la operación del taller.</p>
-    </div>
-    <a class="btn btn-light btn-sm" href="reportes_admin.php">Ver panel de recepción</a>
-  </div>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Código Seguimiento</th>
-          <th>Bicicleta</th>
-          <th>Cliente</th>
-          <th>Categoría Falla</th>
-          <th>Fecha Reporte</th>
-          <th>Estado</th>
-          <th>Mecánico Asignado</th>
-          <th>Acción</th>
-        </tr>
-      </thead>
-      <tbody>
-      <?php foreach ($recentReports as $rp): ?>
-        <tr>
-          <td><code style="font-weight:700;color:var(--green-700)"><?= e($rp['codigo_seguimiento'] ?: ('REP-'.$rp['id_reporte'])) ?></code></td>
-          <td><b><?= e($rp['codigo'] ?: $rp['codigo_bici']) ?></b> <?= e($rp['modelo']) ?></td>
-          <td><?= e($rp['nombre_cliente']) ?> · <?= e($rp['telefono_cliente'] ?: '') ?></td>
-          <td><span class="badge badge-neutral"><?= e($rp['categoria_problema']) ?></span></td>
-          <td><?= format_date($rp['creado_en']) ?></td>
-          <td>
-            <span class="badge badge-<?= status_class($rp['estado']) ?>">
-              <?= e($rp['estado']) ?>
-            </span>
-          </td>
-          <td><?= e($rp['tecnico'] ?: 'Sin asignar') ?></td>
-          <td>
-            <a class="btn btn-primary btn-sm" href="reportes_admin.php">
-              <span class="material-symbols-outlined">assignment</span>Gestionar
-            </a>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-      <?php if (!$recentReports): ?>
-        <tr><td colspan="8" class="empty">No hay solicitudes de clientes registradas.</td></tr>
-      <?php endif; ?>
-      </tbody>
-    </table>
-  </div>
+<section class="ops-hero">
+    <div><span class="eyebrow">eBike · MOVILIDAD ELÉCTRICA</span><h1>Centro de operaciones</h1><p>Una sola vista de alquileres, flota y mantenimiento interno.</p></div>
+    <div class="ops-hero-stat"><span>Ingresos confirmados</span><strong><?= e(money($alq['ingresos'] ?? 0)) ?></strong></div>
 </section>
 
+<div class="kpis">
+    <div class="card kpi"><div class="kpi-top"><span>Total de bicicletas</span><span class="kpi-icon material-symbols-outlined">electric_bike</span></div><strong class="kpi-value"><?= (int)($bicis['total_bicis'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Disponibles</span><span class="kpi-icon material-symbols-outlined">check_circle</span></div><strong class="kpi-value success"><?= (int)($bicis['disponibles'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Alquiladas / reservadas</span><span class="kpi-icon material-symbols-outlined">event_busy</span></div><strong class="kpi-value info"><?= (int)($bicis['ocupadas'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>En mantenimiento</span><span class="kpi-icon material-symbols-outlined">build</span></div><strong class="kpi-value warning"><?= (int)($bicis['mantenimiento'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Alquileres activos</span><span class="kpi-icon material-symbols-outlined">route</span></div><strong class="kpi-value"><?= (int)($alq['activos'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Finalizados</span><span class="kpi-icon material-symbols-outlined">task_alt</span></div><strong class="kpi-value success"><?= (int)($alq['finalizados'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Incidencias pendientes</span><span class="kpi-icon material-symbols-outlined">report_problem</span></div><strong class="kpi-value warning"><?= (int)($rep['pendientes'] ?? 0) ?></strong></div>
+    <div class="card kpi"><div class="kpi-top"><span>Por validar</span><span class="kpi-icon material-symbols-outlined">fact_check</span></div><strong class="kpi-value info"><?= (int)($rep['por_validar'] ?? 0) ?></strong></div>
+</div>
+
+<div class="grid-main">
+    <div class="stack">
+        <section class="panel">
+            <div class="panel-head"><h2>Últimos alquileres</h2><a class="link" href="alquileres_admin.php">Ver todos</a></div>
+            <div class="table-wrap"><table class="table">
+                <thead><tr><th>Alquiler</th><th>Bicicleta</th><th>Cliente</th><th>Inicio</th><th>Estado</th></tr></thead>
+                <tbody>
+                <?php foreach ($ultimosAlq as $u): ?>
+                    <tr><td><a href="ticket.php?codigo=<?= e($u['codigo_alquiler']) ?>"><?= e($u['codigo_alquiler']) ?></a></td>
+                        <td><?= e($u['bici']) ?></td><td><?= e($u['cliente']) ?></td><td><?= e(format_date($u['fecha_inicio'])) ?></td>
+                        <td><span class="badge badge-<?= status_class($u['estado']) ?>"><?= e(rental_label($u['estado'])) ?></span></td></tr>
+                <?php endforeach; ?>
+                <?php if (!$ultimosAlq): ?><tr><td colspan="5" class="center">Todavía no hay alquileres registrados.</td></tr><?php endif; ?>
+                </tbody>
+            </table></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Incidencias recientes</h2><a class="link" href="reportes_admin.php">Ver bandejas</a></div>
+            <div class="table-wrap"><table class="table">
+                <thead><tr><th>Reporte</th><th>Bicicleta</th><th>Tipo</th><th>Recibido</th><th>Estado</th></tr></thead>
+                <tbody>
+                <?php foreach ($ultimosRep as $u): ?>
+                    <tr><td><?= e($u['codigo_seguimiento']) ?></td><td><?= e($u['bici']) ?></td><td><?= e($u['categoria_problema']) ?></td>
+                        <td><?= e(time_ago($u['creado_en'])) ?></td><td><span class="badge badge-<?= status_class($u['estado']) ?>"><?= e($u['estado']) ?></span></td></tr>
+                <?php endforeach; ?>
+                <?php if (!$ultimosRep): ?><tr><td colspan="5" class="center">No hay incidencias registradas.</td></tr><?php endif; ?>
+                </tbody>
+            </table></div>
+        </section>
+    </div>
+    <div class="side-stack">
+        <section class="panel">
+            <div class="panel-head"><h2>Utilización de la flota</h2></div>
+            <div class="panel-body"><canvas id="chartFlota" height="220"></canvas></div>
+        </section>
+        <section class="panel">
+            <div class="panel-head"><h2>Batería baja</h2></div>
+            <div class="panel-body">
+                <?php foreach ($bateriaBaja as $b): ?>
+                    <div class="battery-row"><span><?= e($b['codigo']) ?> · <?= e($b['modelo']) ?></span><strong><?= (int)$b['nivel_bateria'] ?>%</strong></div>
+                <?php endforeach; ?>
+                <?php if (!$bateriaBaja): ?><p class="muted">Todas las baterías tienen nivel suficiente.</p><?php endif; ?>
+                <a class="btn btn-soft btn-block" href="bicicletas.php">Gestionar flota</a>
+            </div>
+        </section>
+        <section class="panel quick">
+            <div class="panel-head"><h2>Acciones rápidas</h2></div>
+            <a class="quick-item" href="alquileres_admin.php"><span class="material-symbols-outlined">receipt_long</span>Supervisar alquileres</a>
+            <a class="quick-item" href="reportes_admin.php"><span class="material-symbols-outlined">fact_check</span>Validar incidencias</a>
+            <a class="quick-item" href="bicicletas.php"><span class="material-symbols-outlined">electric_bike</span>Administrar flota</a>
+            <a class="quick-item" href="contabilidad.php"><span class="material-symbols-outlined">payments</span>Ver finanzas</a>
+        </section>
+    </div>
+</div>
 <script>
-window.addEventListener('DOMContentLoaded', () => {
-  const ctx = document.getElementById('statusChart');
-  if (ctx) {
-    new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: <?= json_encode($chartLabels) ?>,
+const estados = <?= json_encode($porEstado, JSON_UNESCAPED_UNICODE) ?>;
+new Chart(document.getElementById('chartFlota'), {
+    type: 'doughnut',
+    data: {
+        labels: ['Solicitudes','Confirmados','Asignados','Activos','Finalizando','Finalizados','Cancelados'],
         datasets: [{
-          data: <?= json_encode($chartCounts) ?>,
-          backgroundColor: [
-            '#16a05d', '#087a50', '#35b96f', '#073b2a', '#126e9b', '#9a6a00', '#c73d3d', '#557065'
-          ],
-          borderWidth: 2,
-          borderColor: '#ffffff'
+            data: ['solicitud_recibida','confirmado','asignado','activo','finalizacion_solicitada','finalizado','cancelado'].map(k => Number(estados[k] || 0)),
+            backgroundColor: ['#f0a742','#3a8ee6','#8b6fe8','#16a05d','#e07a3f','#0a5c46','#c73d3d'],
+            borderWidth: 0
         }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }
-        }
-      }
-    });
-  }
+    },
+    options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } } }
 });
 </script>
-
 <?php include __DIR__ . '/partials/footer.php'; ?>

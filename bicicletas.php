@@ -1,269 +1,146 @@
 <?php
+declare(strict_types=1);
 session_start();
 require_once __DIR__ . '/config/helpers.php';
 require_mechanic_or_admin();
-
-$pageTitle = 'Flota de Bicicletas';
 $pdo = db();
+$q = trim((string)($_GET['q'] ?? ''));
+$estado = trim((string)($_GET['estado'] ?? ''));
+$where = ['1=1']; $params = [];
+if ($q !== '') { $where[] = '(b.codigo LIKE ? OR b.modelo LIKE ? OR b.nombre LIKE ? OR b.numero_serie LIKE ?)'; $v = "%$q%"; array_push($params, $v, $v, $v, $v); }
+if ($estado !== '') { $where[] = 'b.estado_operativo = ?'; $params[] = $estado; }
+$stmt = $pdo->prepare(
+    "SELECT b.*,
+            (SELECT COUNT(*) FROM alquileres a WHERE a.id_bicicleta=b.id_bicicleta) AS alquileres,
+            (SELECT COUNT(*) FROM reportes_clientes r WHERE r.id_bicicleta=b.id_bicicleta) AS reportes
+     FROM bicicletas b WHERE " . implode(' AND ', $where) . " ORDER BY b.codigo"
+);
+$stmt->execute($params); $bicis = $stmt->fetchAll();
 
-$search = trim($_GET['buscar'] ?? '');
-$filterTipo = trim($_GET['tipo'] ?? '');
-
-$where = [];
-$params = [];
-
-if ($search !== '') {
-    $where[] = "(b.codigo LIKE ? OR b.modelo LIKE ? OR b.marca LIKE ? OR b.cliente LIKE ? OR b.telefono_cliente LIKE ? OR b.numero_serie LIKE ?)";
-    for ($i = 0; $i < 6; $i++) $params[] = "%$search%";
+$historial = null;
+if (isset($_GET['historial'])) {
+    $idHist = (int)$_GET['historial'];
+    $stmt = $pdo->prepare('SELECT * FROM bicicletas WHERE id_bicicleta=?'); $stmt->execute([$idHist]); $historial = $stmt->fetch();
+    if ($historial) {
+        $stmt = $pdo->prepare('SELECT a.codigo_alquiler, a.fecha_inicio, a.estado, u.nombre FROM alquileres a JOIN usuarios u ON u.id=a.id_cliente WHERE a.id_bicicleta=? ORDER BY a.creado_en DESC LIMIT 20');
+        $stmt->execute([$idHist]); $histAlq = $stmt->fetchAll();
+        $stmt = $pdo->prepare('SELECT i.estado_reporte, i.diagnostico, i.creado_en, e.nombre FROM intervenciones_mantenimiento i JOIN empleados e ON e.id_empleado=i.id_mecanico WHERE i.id_reporte IN (SELECT id_reporte FROM reportes_clientes WHERE id_bicicleta=?) ORDER BY i.creado_en DESC LIMIT 20');
+        $stmt->execute([$idHist]); $histMant = $stmt->fetchAll();
+    }
 }
-if ($filterTipo !== '') {
-    $where[] = "b.tipo_bicicleta = ?";
-    $params[] = $filterTipo;
-}
-
-$sql = "
-    SELECT b.*, 
-           u.usuario AS usuario_cliente,
-           COUNT(m.id_manten) AS total_manten,
-           MAX(m.fecha_ingreso) AS ultimo_servicio
-    FROM bicicletas b
-    LEFT JOIN usuarios u ON u.id = b.id_usuario
-    LEFT JOIN mantenimientos m ON m.id_bicicleta = b.id_bicicleta
-";
-if ($where) $sql .= " WHERE " . implode(' AND ', $where);
-$sql .= " GROUP BY b.id_bicicleta ORDER BY b.id_bicicleta DESC";
-
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$rows = $stmt->fetchAll();
-
-$clientes = $pdo->query("SELECT id, nombre, usuario, telefono FROM usuarios WHERE rol='cliente' AND activo=1 ORDER BY nombre")->fetchAll();
-
+$pageTitle = 'Gestión de flota';
 include __DIR__ . '/partials/header.php';
 ?>
+<section class="page-intro"><span class="eyebrow">FLOTA DE ALQUILER</span><h1>Gestión de flota</h1><p>Cada eBike tiene un código único vitalicio, estado operativo, tarifas e historial completo.</p></section>
 
-<div class="hero">
-  <div>
-    <span class="eyebrow">VEHÍCULOS & CLIENTES</span>
-    <h1>Flota de Bicicletas Eléctricas</h1>
-    <p>Consulta las bicicletas registradas, especificaciones técnicas y su historial de órdenes de mantenimiento.</p>
-  </div>
-  <?php if (is_admin()): ?>
-    <button class="btn btn-primary" type="button" onclick="openNewBikeModal()">
-      <span class="material-symbols-outlined">add</span>Nueva Bicicleta
-    </button>
-  <?php endif; ?>
-</div>
-
-<section class="panel">
-  <!-- Filtros -->
-  <form class="filters" method="get" style="grid-template-columns:2fr 1fr auto">
-    <input class="input" name="buscar" value="<?= e($search) ?>" placeholder="Buscar por código, modelo, marca, cliente, teléfono o serie...">
-    <select class="select" name="tipo">
-      <option value="">Todos los tipos de eBike</option>
-      <?php foreach (BIKE_TYPES as $bt): ?>
-        <option value="<?= e($bt) ?>" <?= ($filterTipo === $bt) ? 'selected' : '' ?>><?= e($bt) ?></option>
-      <?php endforeach; ?>
-    </select>
-    <button class="btn btn-primary" type="submit">
-      <span class="material-symbols-outlined">filter_alt</span>Filtrar
-    </button>
-  </form>
-
-  <div class="panel-head">
-    <div>
-      <h2>Bicicletas Registradas en el Taller</h2>
-      <p><?= count($rows) ?> bicicleta(s) en la base de datos.</p>
-    </div>
-  </div>
-
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Código</th>
-          <th>Marca & Modelo</th>
-          <th>Tipo</th>
-          <th>Color / N° Serie</th>
-          <th>Cliente Propietario</th>
-          <th>Teléfono Contacto</th>
-          <th>Mantenimientos</th>
-          <th>Último Servicio</th>
-          <th>Estado</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody>
-      <?php foreach ($rows as $r): ?>
-        <tr>
-          <td class="id"><b style="font-size:14px"><?= e($r['codigo']) ?></b></td>
-          <td><b><?= e($r['marca']) ?></b> <?= e($r['modelo']) ?></td>
-          <td><span class="badge badge-neutral"><?= e($r['tipo_bicicleta'] ?: 'Urbana') ?></span></td>
-          <td>
-            <?= e($r['color'] ?: '—') ?><br>
-            <small class="muted">Serie: <?= e($r['numero_serie'] ?: 'Sin serie') ?></small>
-          </td>
-          <td>
-            <b><?= e($r['cliente'] ?: 'Sin cliente') ?></b>
-            <?php if (!empty($r['usuario_cliente'])): ?>
-              <br><small class="muted">Cuenta: @<?= e($r['usuario_cliente']) ?></small>
-            <?php endif; ?>
-          </td>
-          <td><?= e($r['telefono_cliente'] ?: '—') ?></td>
-          <td>
-            <a href="mantenimientos.php?buscar=<?= urlencode($r['codigo']) ?>" style="font-weight:700;color:var(--green-700)">
-              <span class="badge badge-info"><?= (int)$r['total_manten'] ?> orden(es)</span>
-            </a>
-          </td>
-          <td><?= format_date($r['ultimo_servicio']) ?></td>
-          <td>
-            <span class="badge badge-<?= $r['activa'] ? 'success' : 'danger' ?>">
-              <?= $r['activa'] ? 'Activa' : 'Inactiva' ?>
-            </span>
-          </td>
-          <td>
-            <div class="actions-cell">
-              <a class="btn btn-light btn-sm" href="mantenimientos.php?buscar=<?= urlencode($r['codigo']) ?>" title="Ver historial de mantenimientos">
-                <span class="material-symbols-outlined">history</span>
-              </a>
-              <?php if (is_admin()): ?>
-                <button class="icon-btn" title="Editar bicicleta" onclick='editBike(<?= json_encode($r, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?>)'>
-                  <span class="material-symbols-outlined">edit</span>
-                </button>
-              <?php endif; ?>
-            </div>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-      <?php if (!$rows): ?>
-        <tr><td colspan="10" class="empty">No se encontraron bicicletas.</td></tr>
-      <?php endif; ?>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<!-- MODAL CREACIÓN / EDICIÓN BICICLETA -->
-<div class="modal-backdrop <?= isset($_GET['nuevo']) ? 'show' : '' ?>" id="bikeModal">
-  <div class="modal">
-    <div class="modal-head">
-      <h2 id="bikeTitle">Nueva Bicicleta</h2>
-      <button class="icon-btn" onclick="closeModal('bikeModal')"><span class="material-symbols-outlined">close</span></button>
-    </div>
-    <form method="post" action="api/bicicleta.php">
-      <?= csrf_field() ?>
-      <input type="hidden" name="accion" id="bikeAccion" value="crear">
-      <input type="hidden" name="id_bicicleta" id="bikeId">
-
-      <div class="modal-body">
-        <div class="form-grid">
-          <div class="field">
-            <label>Código / Placa Identificadora <span class="required">*</span></label>
-            <input class="input" name="codigo" id="codigo" required maxlength="50" placeholder="Ej. EBK-1095">
-          </div>
-
-          <div class="field">
-            <label>Modelo de la eBike <span class="required">*</span></label>
-            <input class="input" name="modelo" id="modelo" required maxlength="120" placeholder="Ej. Trail Pro 500W">
-          </div>
-
-          <div class="field">
-            <label>Marca</label>
-            <input class="input" name="marca" id="marca" value="eBike" placeholder="eBike, Specialized, Trek">
-          </div>
-
-          <div class="field">
-            <label>Tipo de Bicicleta</label>
-            <select class="select" name="tipo_bicicleta" id="tipo_bicicleta">
-              <?php foreach (BIKE_TYPES as $bt): ?>
-                <option value="<?= e($bt) ?>"><?= e($bt) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-
-          <div class="field">
-            <label>Vincular a Cuenta de Cliente (Opcional)</label>
-            <select class="select" name="id_usuario" id="id_usuario" onchange="autoFillCustomerInfo(this)">
-              <option value="">Seleccionar cliente registrado o escribir manual...</option>
-              <?php foreach ($clientes as $c): ?>
-                <option value="<?= (int)$c['id'] ?>" data-name="<?= e($c['nombre']) ?>" data-phone="<?= e($c['telefono']) ?>">
-                  <?= e($c['nombre']) ?> (@<?= e($c['usuario']) ?>)
-                </option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-
-          <div class="field">
-            <label>Nombre del Cliente</label>
-            <input class="input" name="cliente" id="cliente" placeholder="Nombre completo del cliente">
-          </div>
-
-          <div class="field">
-            <label>Teléfono del Cliente</label>
-            <input class="input" name="telefono_cliente" id="telefono_cliente" placeholder="300 000 0000">
-          </div>
-
-          <div class="field">
-            <label>Color</label>
-            <input class="input" name="color" id="color" placeholder="Ej. Negro mate con verde">
-          </div>
-
-          <div class="field">
-            <label>Número de Serie / Chasis</label>
-            <input class="input" name="numero_serie" id="numero_serie" placeholder="Grabado en el cuadro">
-          </div>
-
-          <div class="field">
-            <label>Estado</label>
-            <select class="select" name="activa" id="activa">
-              <option value="1">Activa</option>
-              <option value="0">Inactiva</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="modal-foot">
-        <button class="btn btn-light" type="button" onclick="closeModal('bikeModal')">Cancelar</button>
-        <button class="btn btn-primary" type="submit">Guardar Bicicleta</button>
-      </div>
+<div class="toolbar">
+    <form class="filters" method="get" action="bicicletas.php">
+        <input class="input" type="search" name="q" value="<?= e($q) ?>" placeholder="Buscar código, modelo, serie…">
+        <select class="input" name="estado"><option value="">Todos los estados</option>
+            <?php foreach (BIKE_OPERATIVE_STATES as $key => $label): ?>
+                <option value="<?= e($key) ?>" <?= $estado === $key ? 'selected' : '' ?>><?= e($label) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <button class="btn btn-soft" type="submit">Filtrar</button>
     </form>
-  </div>
+    <?php if (is_admin()): ?><button class="btn btn-primary" type="button" onclick="openModal('modalBici')"><span class="material-symbols-outlined">add</span>Incorporar eBike</button><?php endif; ?>
 </div>
+
+<div class="panel"><div class="table-wrap"><table class="table">
+    <thead><tr><th>Código</th><th>eBike</th><th>Tipo / autonomía</th><th>Batería</th><th>Tarifas</th><th>Estado operativo</th><th>Historial</th><th>Acciones</th></tr></thead>
+    <tbody>
+    <?php foreach ($bicis as $b): ?>
+        <tr>
+            <td><span class="code-chip"><?= e($b['codigo']) ?></span></td>
+            <td><strong><?= e($b['nombre'] ?: $b['modelo']) ?></strong><br><small><?= e($b['marca']) ?> <?= e($b['modelo']) ?></small></td>
+            <td><?= e($b['tipo_bicicleta']) ?><br><small><?= (int)$b['autonomia_km'] ?> km · <?= (int)$b['capacidad_bateria_wh'] ?> Wh</small></td>
+            <td><div class="battery-bar"><i style="width:<?= (int)$b['nivel_bateria'] ?>%"></i></div><small><?= (int)$b['nivel_bateria'] ?>%</small></td>
+            <td><?= e(money($b['precio_hora'])) ?>/h<br><small><?= e(money($b['precio_dia'])) ?>/día</small></td>
+            <td><span class="badge badge-<?= status_class($b['estado_operativo']) ?>"><?= e(bike_state_label($b['estado_operativo'])) ?></span></td>
+            <td><a class="link" href="bicicletas.php?historial=<?= (int)$b['id_bicicleta'] ?>"><?= (int)$b['alquileres'] ?> alq. · <?= (int)$b['reportes'] ?> rep.</a></td>
+            <td class="actions-cell">
+                <?php if (is_admin()): ?>
+                    <button class="icon-btn" type="button" onclick="editarBici(<?= (int)$b['id_bicicleta'] ?>)" title="Editar"><span class="material-symbols-outlined">edit</span></button>
+                    <form method="post" action="api/bicicleta.php" class="inline-form"><?= csrf_field() ?>
+                        <input type="hidden" name="accion" value="estado"><input type="hidden" name="id_bicicleta" value="<?= (int)$b['id_bicicleta'] ?>">
+                        <select class="input input-sm" name="estado_operativo" onchange="this.form.submit()">
+                            <?php foreach (BIKE_OPERATIVE_STATES as $key => $label): ?>
+                                <option value="<?= e($key) ?>" <?= $b['estado_operativo'] === $key ? 'selected' : '' ?>><?= e($label) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </form>
+                <?php else: ?><span class="small muted">Solo lectura</span><?php endif; ?>
+            </td>
+        </tr>
+    <?php endforeach; ?>
+    <?php if (!$bicis): ?><tr><td colspan="8" class="center">No hay bicicletas que coincidan.</td></tr><?php endif; ?>
+    </tbody>
+</table></div></div>
+
+<?php if (is_admin()): ?>
+<div class="modal-backdrop" id="modalBici">
+    <div class="modal modal-wide">
+        <div class="modal-head"><h2 id="tituloModal">Incorporar eBike a la flota</h2><button class="icon-btn" onclick="closeModal('modalBici')" type="button"><span class="material-symbols-outlined">close</span></button></div>
+        <form method="post" action="api/bicicleta.php" enctype="multipart/form-data" class="modal-body stack-form" id="formBici">
+            <?= csrf_field() ?><input type="hidden" name="accion" value="crear" id="accionBici"><input type="hidden" name="id_bicicleta" value="0" id="idBici">
+            <div class="form-grid">
+                <label>Código único *<input class="input" name="codigo" id="bCodigo" required placeholder="EBK-00005"></label>
+                <label>Modelo *<input class="input" name="modelo" id="bModelo" required></label>
+                <label>Nombre comercial<input class="input" name="nombre" id="bNombre"></label>
+                <label>Marca<input class="input" name="marca" id="bMarca" value="eBike"></label>
+                <label>Tipo<select class="input" name="tipo_bicicleta" id="bTipo"><?php foreach (BIKE_TYPES as $t): ?><option><?= e($t) ?></option><?php endforeach; ?></select></label>
+                <label>Número de serie<input class="input" name="numero_serie" id="bSerie"></label>
+                <label>Autonomía (km)<input class="input" type="number" name="autonomia_km" id="bAuto" min="0" value="50"></label>
+                <label>Capacidad batería (Wh)<input class="input" type="number" name="capacidad_bateria_wh" id="bWh" min="0" value="504"></label>
+                <label>Nivel de batería (%)<input class="input" type="number" name="nivel_bateria" id="bNivel" min="0" max="100" value="100"></label>
+                <label>Precio por hora (COP)<input class="input" type="number" name="precio_hora" id="bHora" min="0" step="1000" value="18000"></label>
+                <label>Precio por día (COP)<input class="input" type="number" name="precio_dia" id="bDia" min="0" step="1000" value="95000"></label>
+                <label>Fecha de incorporación<input class="input" type="datetime-local" name="fecha_incorporacion" id="bFecha"></label>
+                <label>Color<input class="input" name="color" id="bColor"></label>
+                <label>Fotografía<input class="input" type="file" name="foto" accept="image/jpeg,image/png,image/webp"></label>
+            </div>
+            <label>Características<textarea class="input" name="caracteristicas" id="bCarac" rows="2"></textarea></label>
+            <label>Descripción<textarea class="input" name="descripcion" id="bDesc" rows="2"></textarea></label>
+            <div class="modal-foot"><button class="btn btn-primary" type="submit">Guardar</button></div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if ($historial): ?>
+<div class="modal-backdrop show">
+    <div class="modal modal-wide">
+        <div class="modal-head"><h2>Historial de <?= e($historial['codigo']) ?></h2><a class="icon-btn" href="bicicletas.php">✕</a></div>
+        <div class="modal-body">
+            <h3>Alquileres</h3>
+            <?php foreach ($histAlq as $a): ?><div class="history-line"><strong><?= e($a['codigo_alquiler']) ?> · <?= e(rental_label($a['estado'])) ?></strong><p><?= e($a['nombre']) ?></p><small><?= e(format_date($a['fecha_inicio'])) ?></small></div><?php endforeach; ?>
+            <?php if (!$histAlq): ?><p class="muted">Sin alquileres registrados.</p><?php endif; ?>
+            <h3>Intervenciones de mantenimiento</h3>
+            <?php foreach ($histMant as $m): ?><div class="history-line"><strong><?= e($m['estado_reporte']) ?> · <?= e($m['nombre']) ?></strong><p><?= e($m['diagnostico']) ?></p><small><?= e(format_date($m['creado_en'])) ?></small></div><?php endforeach; ?>
+            <?php if (!$histMant): ?><p class="muted">Sin intervenciones registradas.</p><?php endif; ?>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <script>
-function autoFillCustomerInfo(sel){
-  const opt = sel.selectedOptions[0];
-  if(opt && opt.value){
-    document.getElementById('cliente').value = opt.dataset.name || '';
-    document.getElementById('telefono_cliente').value = opt.dataset.phone || '';
-  }
-}
-
-function openNewBikeModal(){
-  document.getElementById('bikeTitle').textContent = 'Nueva Bicicleta';
-  document.getElementById('bikeAccion').value = 'crear';
-  document.getElementById('bikeId').value = '';
-  ['codigo','modelo','cliente','telefono_cliente','color','numero_serie'].forEach(k => document.getElementById(k).value = '');
-  document.getElementById('marca').value = 'eBike';
-  document.getElementById('id_usuario').value = '';
-  document.getElementById('activa').value = '1';
-  openModal('bikeModal');
-}
-
-function editBike(r){
-  document.getElementById('bikeTitle').textContent = 'Editar Bicicleta ' + r.codigo;
-  document.getElementById('bikeAccion').value = 'editar';
-  document.getElementById('bikeId').value = r.id_bicicleta;
-  ['codigo','modelo','marca','tipo_bicicleta','cliente','telefono_cliente','id_usuario','color','numero_serie','activa'].forEach(k => {
-    const el = document.getElementById(k);
-    if(el) el.value = r[k] ?? '';
-  });
-  syncSearchableSelect('tipo_bicicleta');
-  syncSearchableSelect('id_usuario');
-  syncSearchableSelect('activa');
-  openModal('bikeModal');
+const bikes = <?= json_encode($bicis, JSON_UNESCAPED_UNICODE) ?>;
+function editarBici(id) {
+    const b = bikes.find(x => Number(x.id_bicicleta) === id);
+    if (!b) return;
+    document.getElementById('tituloModal').textContent = 'Editar ' + b.codigo;
+    document.getElementById('accionBici').value = 'editar';
+    document.getElementById('idBici').value = id;
+    document.getElementById('bCodigo').value = b.codigo;
+    document.getElementById('bCodigo').readOnly = true;
+    ['modelo','nombre','marca','tipo_bicicleta','numero_serie','autonomia_km','capacidad_bateria_wh','nivel_bateria','precio_hora','precio_dia','color','caracteristicas','descripcion']
+        .forEach(k => { const el = document.getElementById('b' + ({
+            modelo:'Modelo', nombre:'Nombre', marca:'Marca', tipo_bicicleta:'Tipo', numero_serie:'Serie',
+            autonomia_km:'Auto', capacidad_bateria_wh:'Wh', nivel_bateria:'Nivel', precio_hora:'Hora',
+            precio_dia:'Dia', color:'Color', caracteristicas:'Carac', descripcion:'Desc'
+        }[k])); if (el) el.value = b[k] ?? ''; });
+    document.getElementById('bFecha').value = b.fecha_incorporacion ? b.fecha_incorporacion.slice(0,16) : '';
+    openModal('modalBici');
 }
 </script>
-
 <?php include __DIR__ . '/partials/footer.php'; ?>

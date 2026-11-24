@@ -3,48 +3,76 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/database.php';
 
-const MAINTENANCE_STATES = [
-    'Recibido',
-    'Pendiente de revisión',
-    'En diagnóstico',
-    'Esperando repuestos',
-    'En reparación',
-    'En pruebas',
-    'Reparado',
-    'Entregado',
-    'Cancelado'
+/* Catálogos del negocio: alquiler de eBikes con mantenimiento interno */
+
+const RENTAL_STATES = [
+    'solicitud_recibida'      => 'Solicitud recibida',
+    'confirmado'              => 'Alquiler confirmado',
+    'asignado'                => 'Bicicleta asignada',
+    'activo'                  => 'Alquiler activo',
+    'finalizacion_solicitada' => 'Finalización solicitada',
+    'finalizado'              => 'Alquiler finalizado',
+    'cancelado'               => 'Alquiler cancelado',
 ];
 
-const PROBLEM_CATEGORIES = [
-    'Batería',
-    'Motor eléctrico',
-    'Controlador',
-    'Frenos',
-    'Llantas',
-    'Sistema eléctrico',
-    'Pantalla',
-    'Cargador',
-    'Transmisión',
-    'Otros'
+const RENTAL_TIMELINE = [
+    'solicitud_recibida', 'confirmado', 'asignado', 'activo',
+    'finalizacion_solicitada', 'finalizado'
 ];
+
+const RENTAL_OPEN_STATES = ['solicitud_recibida', 'confirmado', 'asignado', 'activo', 'finalizacion_solicitada'];
+
+const REPORT_STATES = [
+    'En espera', 'En investigación', 'En mantenimiento', 'En pruebas',
+    'Terminado', 'Requiere nueva revisión', 'Cerrado', 'Cancelado'
+];
+
+const REPORT_ACTIVE_STATES = ['En espera', 'En investigación', 'En mantenimiento', 'En pruebas', 'Requiere nueva revisión'];
+
+const BIKE_OPERATIVE_STATES = [
+    'disponible' => 'Disponible',
+    'reservada' => 'Reservada',
+    'alquilada' => 'Alquilada',
+    'en_mantenimiento' => 'En mantenimiento',
+    'en_revision' => 'En revisión',
+    'fuera_de_servicio' => 'Fuera de servicio',
+];
+
+const REPORT_CATEGORIES = [
+    'Problema con la batería',
+    'Problema con el motor',
+    'Problema con los frenos',
+    'Problema con las llantas',
+    'Problema eléctrico',
+    'Problema durante el recorrido',
+    'Otro inconveniente',
+];
+
+const PROBLEM_CATEGORIES = REPORT_CATEGORIES;
+
+// Compatibilidad con incidencias históricas
+const LEGACY_CATEGORY_MAP = [
+    'Batería' => 'Problema con la batería',
+    'Motor eléctrico' => 'Problema con el motor',
+    'Controlador' => 'Problema eléctrico',
+    'Frenos' => 'Problema con los frenos',
+    'Llantas' => 'Problema con las llantas',
+    'Sistema eléctrico' => 'Problema eléctrico',
+    'Pantalla' => 'Problema eléctrico',
+    'Cargador' => 'Problema con la batería',
+    'Transmisión' => 'Problema durante el recorrido',
+    'Otros' => 'Otro inconveniente',
+];
+
+const MAINTENANCE_STATES = REPORT_STATES;
 
 const BIKE_TYPES = [
-    'Urbana',
-    'Montaña',
-    'Plegable',
-    'Carga',
-    'Ruta',
-    'Fat Bike',
-    'Scooter / Patineta',
-    'Otra'
+    'Urbana', 'Montaña', 'Plegable', 'Carga', 'Ruta', 'Fat Bike', 'Scooter / Patineta', 'Otra'
 ];
 
 const EXPENSE_CATEGORIES = [
-    'Compra de repuestos',
-    'Compra de herramientas',
-    'Mantenimiento de equipos',
-    'Gastos operativos',
-    'Otros gastos'
+    'Compra de repuestos', 'Compra de herramientas', 'Mantenimiento de equipos',
+    'Gastos operativos', 'Otros gastos'
 ];
 
 function e(mixed $value): string
@@ -82,16 +110,42 @@ function format_date(?string $date): string
     return $ts ? date('d/m/Y H:i', $ts) : e($date);
 }
 
+function time_ago(?string $date): string
+{
+    if (!$date) return '—';
+    $ts = strtotime($date);
+    if (!$ts) return '—';
+    $diff = max(0, time() - $ts);
+    if ($diff < 60) return 'hace un momento';
+    if ($diff < 3600) return 'hace ' . intdiv($diff, 60) . ' min';
+    if ($diff < 86400) return 'hace ' . intdiv($diff, 3600) . ' h';
+    if ($diff < 604800) return 'hace ' . intdiv($diff, 86400) . ' d';
+    return format_date($date);
+}
+
 function status_class(string $status): string
 {
     $s = mb_strtolower(trim($status));
     return match ($s) {
-        'reparado', 'entregado', 'completado', 'finalizado', 'listo', 'pagado' => 'success',
-        'en diagnóstico', 'en diagnostico', 'en reparación', 'en reparacion', 'en pruebas', 'en proceso', 'asignado' => 'info',
-        'recibido', 'pendiente de revisión', 'pendiente de revision', 'esperando repuestos', 'esperando repuesto', 'pendiente' => 'warning',
-        'cancelado', 'inactiva', 'stock bajo' => 'danger',
+        'terminado', 'cerrado', 'finalizado', 'listo', 'pagado', 'confirmado', 'aprobado', 'disponible', 'success' => 'success',
+        'en investigación', 'en investigacion', 'en mantenimiento', 'en pruebas', 'asignado', 'activo',
+        'alquilada', 'reservada', 'en proceso', 'info' => 'info',
+        'en espera', 'solicitud recibida', 'finalización solicitada', 'finalizacion solicitada',
+        'pendiente', 'pendiente de revisión', 'pendiente de revision', 'requiere nueva revisión',
+        'requiere nueva revision', 'stock bajo', 'warning' => 'warning',
+        'cancelado', 'fuera de servicio', 'en revisión', 'en revision', 'inactiva', 'fallido', 'danger' => 'danger',
         default => 'neutral',
     };
+}
+
+function rental_label(string $state): string
+{
+    return RENTAL_STATES[$state] ?? $state;
+}
+
+function bike_state_label(string $state): string
+{
+    return BIKE_OPERATIVE_STATES[$state] ?? $state;
 }
 
 function initials(string $name): string
@@ -111,14 +165,16 @@ function post_string(string $key, string $default = ''): string
 
 function post_int(string $key, ?int $default = null): ?int
 {
-    $value = filter_input(INPUT_POST, $key, FILTER_VALIDATE_INT);
-    return $value === false ? $default : $value;
+    if (!array_key_exists($key, $_POST)) return $default;
+    $value = filter_var($_POST[$key], FILTER_VALIDATE_INT);
+    return $value === false ? $default : (int)$value;
 }
 
 function post_float(string $key, float $default = 0.0): float
 {
-    $value = filter_input(INPUT_POST, $key, FILTER_VALIDATE_FLOAT);
-    return $value === false || $value === null ? $default : (float)$value;
+    if (!array_key_exists($key, $_POST)) return $default;
+    $value = filter_var($_POST[$key], FILTER_VALIDATE_FLOAT);
+    return $value === false ? $default : (float)$value;
 }
 
 /* =========================================================================
@@ -146,7 +202,7 @@ function verify_csrf(): void
 }
 
 /* =========================================================================
-   SISTEMA DE AUDITORÍA Y TRAZABILIDAD
+   AUDITORÍA, HISTORIAL Y NOTIFICACIONES
    ========================================================================= */
 function audit(
     PDO $pdo,
@@ -155,23 +211,48 @@ function audit(
     ?string $new,
     ?int $employeeId = null,
     string $accion = 'Cambio de estado',
-    ?string $detalles = null
+    ?string $detalles = null,
+    ?string $entityType = null,
+    ?int $entityId = null
 ): void {
     try {
-        $userId = $_SESSION['ebike_user']['id'] ?? null;
         $stmt = $pdo->prepare(
-            'INSERT INTO logs_auditoria (id_manten, estado_anterior, estado_nuevo, id_empleado, id_usuario, accion, detalles)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO logs_auditoria
+             (id_manten, entidad_tipo, entidad_id, estado_anterior, estado_nuevo, id_empleado, id_usuario, accion, detalles)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$idManten, $old, $new, $employeeId, $userId, $accion, $detalles]);
-    } catch (Throwable $e) {
-        error_log('Error en audit(): ' . $e->getMessage());
+        $stmt->execute([
+            $idManten, $entityType, $entityId, $old, $new, $employeeId,
+            $_SESSION['ebike_user']['id'] ?? null, $accion, $detalles
+        ]);
+    } catch (Throwable $ex) {
+        error_log('Error en audit(): ' . $ex->getMessage());
     }
 }
 
-/* =========================================================================
-   NOTIFICACIONES INTERNAS
-   ========================================================================= */
+function state_history(PDO $pdo, string $tipo, int $id, ?string $anterior, string $nuevo, ?string $descripcion = null): void
+{
+    try {
+        $stmt = $pdo->prepare(
+            'INSERT INTO historial_estados (entidad_tipo, entidad_id, estado_anterior, estado_nuevo, descripcion, id_usuario)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([$tipo, $id, $anterior, $nuevo, $descripcion, $_SESSION['ebike_user']['id'] ?? null]);
+    } catch (Throwable $ex) {
+        error_log('Error en state_history(): ' . $ex->getMessage());
+    }
+}
+
+function unique_code(PDO $pdo, string $table, string $column, string $prefix): string
+{
+    do {
+        $code = $prefix . '-' . date('Y') . '-' . strtoupper(bin2hex(random_bytes(3)));
+        $stmt = $pdo->prepare("SELECT 1 FROM `$table` WHERE `$column` = ? LIMIT 1");
+        $stmt->execute([$code]);
+    } while ($stmt->fetchColumn());
+    return $code;
+}
+
 function notify(
     PDO $pdo,
     string $titulo,
@@ -186,20 +267,29 @@ function notify(
              VALUES (?, ?, ?, ?, ?, 0)'
         );
         $stmt->execute([$idUsuario, $rolDestino, $titulo, $mensaje, $enlace]);
-    } catch (Throwable $e) {
-        error_log('Error en notify(): ' . $e->getMessage());
+    } catch (Throwable $ex) {
+        error_log('Error en notify(): ' . $ex->getMessage());
     }
+}
+
+function mark_notification_read(PDO $pdo, int $id): void
+{
+    $user = current_user();
+    if (!$user) return;
+    $stmt = $pdo->prepare(
+        'UPDATE notificaciones SET leida = 1 WHERE id_notificacion = ?
+         AND (id_usuario = ? OR rol_destino IN (?, \'todos\'))'
+    );
+    $stmt->execute([$id, (int)$user['id'], (string)($user['rol'] ?? '')]);
 }
 
 function get_unread_notifications_count(PDO $pdo): int
 {
     if (!is_logged_in()) return 0;
     $user = current_user();
-    $userId = (int)($user['id'] ?? 0);
-    $rol = (string)($user['rol'] ?? 'mecanico');
     try {
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM notificaciones WHERE leida=0 AND (id_usuario=? OR rol_destino IN (?, 'todos'))");
-        $stmt->execute([$userId, $rol]);
+        $stmt->execute([(int)($user['id'] ?? 0), (string)($user['rol'] ?? '')]);
         return (int)$stmt->fetchColumn();
     } catch (Throwable) {
         return 0;
@@ -210,12 +300,10 @@ function get_recent_notifications(PDO $pdo, int $limit = 6): array
 {
     if (!is_logged_in()) return [];
     $user = current_user();
-    $userId = (int)($user['id'] ?? 0);
-    $rol = (string)($user['rol'] ?? 'mecanico');
     try {
         $stmt = $pdo->prepare("SELECT * FROM notificaciones WHERE (id_usuario=? OR rol_destino IN (?, 'todos')) ORDER BY id_notificacion DESC LIMIT ?");
-        $stmt->bindValue(1, $userId, PDO::PARAM_INT);
-        $stmt->bindValue(2, $rol, PDO::PARAM_STR);
+        $stmt->bindValue(1, (int)($user['id'] ?? 0), PDO::PARAM_INT);
+        $stmt->bindValue(2, (string)($user['rol'] ?? ''), PDO::PARAM_STR);
         $stmt->bindValue(3, $limit, PDO::PARAM_INT);
         $stmt->execute();
         return $stmt->fetchAll();
@@ -230,8 +318,8 @@ function get_recent_notifications(PDO $pdo, int $limit = 6): array
 function require_login(): void
 {
     if (empty($_SESSION['ebike_user'])) {
-        $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
-        $login = (strpos($base, '/api') !== false) ? '../login.php' : 'login.php';
+        $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/');
+        $login = str_contains($base, '/api') ? '../login.php' : 'login.php';
         redirect($login);
     }
 }
@@ -261,14 +349,20 @@ function is_client(): bool
     return is_logged_in() && (current_user()['rol'] ?? '') === 'cliente';
 }
 
+function home_for_role(): string
+{
+    if (is_admin()) return 'index.php';
+    if (is_mechanic()) return 'mecanico.php';
+    if (is_client()) return 'cliente.php';
+    return 'login.php';
+}
+
 function require_admin(): void
 {
     require_login();
     if (!is_admin()) {
-        flash('error', 'Acceso denegado: Se requieren permisos de Administrador.');
-        if (is_client()) redirect('cliente.php');
-        if (is_mechanic()) redirect('mecanico.php');
-        redirect('login.php');
+        flash('error', 'Acceso denegado: sección exclusiva de administradores.');
+        redirect(home_for_role());
     }
 }
 
@@ -276,8 +370,8 @@ function require_mechanic(): void
 {
     require_login();
     if (!is_mechanic()) {
-        flash('error', 'Acceso denegado: Se requieren permisos de Mecánico.');
-        redirect('index.php');
+        flash('error', 'Acceso denegado: sección exclusiva del departamento técnico.');
+        redirect(home_for_role());
     }
 }
 
@@ -285,8 +379,8 @@ function require_client(): void
 {
     require_login();
     if (!is_client()) {
-        flash('error', 'Acceso denegado: Sección reservada para Clientes.');
-        redirect('index.php');
+        flash('error', 'Acceso denegado: sección exclusiva de clientes.');
+        redirect(home_for_role());
     }
 }
 
@@ -294,71 +388,191 @@ function require_mechanic_or_admin(): void
 {
     require_login();
     if (!is_admin() && !is_mechanic()) {
-        flash('error', 'Rol de usuario no autorizado para operaciones técnicas.');
-        if (is_client()) redirect('cliente.php');
-        redirect('login.php');
+        flash('error', 'Rol no autorizado para operaciones técnicas.');
+        redirect(home_for_role());
+    }
+}
+
+function require_roles(string ...$roles): void
+{
+    require_login();
+    if (!in_array((string)(current_user()['rol'] ?? ''), $roles, true)) {
+        flash('error', 'No tienes permisos para realizar esta acción.');
+        redirect(home_for_role());
     }
 }
 
 /* =========================================================================
-   SUBIDA SEGURA DE ARCHIVOS (FOTOGRAFÍAS DE REPORTES)
+   DISPONIBILIDAD Y ESTADO OPERATIVO DE LA FLOTA
+   ========================================================================= */
+function available_for_rental(PDO $pdo, int $idBicicleta, string $inicio, string $fin, ?int $excluirAlquiler = null): array
+{
+    $stmt = $pdo->prepare('SELECT codigo, estado_operativo, nivel_bateria, activa FROM bicicletas WHERE id_bicicleta = ?');
+    $stmt->execute([$idBicicleta]);
+    $bike = $stmt->fetch();
+    if (!$bike) return [false, 'La bicicleta no existe.'];
+    if ((int)$bike['activa'] !== 1 || !in_array($bike['estado_operativo'], ['disponible', 'reservada'], true)) {
+        return [false, 'La bicicleta no está disponible para alquiler en este momento (' . bike_state_label($bike['estado_operativo']) . ').'];
+    }
+    if ((int)$bike['nivel_bateria'] < 15) {
+        return [false, 'La bicicleta requiere carga antes de ser alquilada.'];
+    }
+    $sql = "SELECT codigo_alquiler FROM alquileres
+            WHERE id_bicicleta = ?
+              AND estado NOT IN ('cancelado', 'finalizado')
+              AND fecha_inicio < ? AND fecha_fin_estimada > ?";
+    $params = [$idBicicleta, $fin, $inicio];
+    if ($excluirAlquiler !== null) {
+        $sql .= ' AND id_alquiler <> ?';
+        $params[] = $excluirAlquiler;
+    }
+    $sql .= ' LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    if ($stmt->fetchColumn()) {
+        return [false, 'La bicicleta ya está reservada/alquilada en el horario solicitado.'];
+    }
+    return [true, 'Disponible'];
+}
+
+function refresh_bike_state(PDO $pdo, int $idBicicleta): void
+{
+    $stmt = $pdo->prepare('SELECT estado_operativo, activa FROM bicicletas WHERE id_bicicleta = ?');
+    $stmt->execute([$idBicicleta]);
+    $bike = $stmt->fetch();
+    if (!$bike) return;
+    // Los bloqueos técnicos nunca se liberan automáticamente.
+    if (in_array($bike['estado_operativo'], ['en_mantenimiento', 'en_revision', 'fuera_de_servicio'], true)
+        || (int)$bike['activa'] === 0) {
+        return;
+    }
+    $stmt = $pdo->prepare(
+        "SELECT
+           MAX(CASE WHEN estado IN ('activo','asignado') THEN 1 ELSE 0 END) AS en_uso,
+           MAX(CASE WHEN estado IN ('confirmado','solicitud_recibida') AND fecha_inicio > NOW() THEN 1 ELSE 0 END) AS reservada
+         FROM alquileres
+         WHERE id_bicicleta = ? AND estado IN ('solicitud_recibida','confirmado','asignado','activo')"
+    );
+    $stmt->execute([$idBicicleta]);
+    $row = $stmt->fetch();
+    $new = ((int)($row['en_uso'] ?? 0) === 1) ? 'alquilada'
+        : (((int)($row['reservada'] ?? 0) === 1) ? 'reservada' : 'disponible');
+    if ($new !== $bike['estado_operativo']) {
+        $pdo->prepare('UPDATE bicicletas SET estado_operativo = ? WHERE id_bicicleta = ?')
+            ->execute([$new, $idBicicleta]);
+        state_history($pdo, 'bicicleta', $idBicicleta, $bike['estado_operativo'], $new, 'Actualización automática por alquiler');
+    }
+}
+
+function redirect_back(string $default): never
+{
+    $ref = (string)($_SERVER['HTTP_REFERER'] ?? '');
+    if ($ref !== '') {
+        $parts = parse_url($ref);
+        $path = (string)($parts['path'] ?? '');
+        if (str_starts_with($path, '/') && !str_contains($path, '//')) {
+            $name = basename($path);
+            if (preg_match('/^[a-z0-9_]+\.php$/i', $name)) {
+                $query = (string)($parts['query'] ?? '');
+                redirect($name . ($query !== '' ? '?' . $query : ''));
+            }
+        }
+    }
+    redirect($default);
+}
+
+function rental_price(array $bike, int $horas): float
+{
+    if ($horas >= 24) {
+        return round((int)ceil($horas / 24) * (float)($bike['precio_dia'] ?? 0), 2);
+    }
+    return round($horas * (float)($bike['precio_hora'] ?? 0), 2);
+}
+
+/* =========================================================================
+   SUBIDA SEGURA DE ARCHIVOS
    ========================================================================= */
 function handle_safe_upload(array $file, string $targetSubdir = 'uploads'): ?string
 {
-    if (empty($file['tmp_name']) || $file['error'] !== UPLOAD_ERR_OK) {
+    if (empty($file['tmp_name']) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
         return null;
     }
-
-    $maxBytes = 5 * 1024 * 1024; // 5 MB
-    if ($file['size'] > $maxBytes) {
+    $maxBytes = 5 * 1024 * 1024;
+    if (($file['size'] ?? 0) > $maxBytes) {
         throw new RuntimeException('El archivo excede el tamaño máximo permitido de 5 MB.');
     }
-
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $mime = $finfo->file($file['tmp_name']);
-    $allowedMimes = [
-        'image/jpeg' => 'jpg',
-        'image/png'  => 'png',
-        'image/webp' => 'webp',
-    ];
-
-    if (!array_key_exists($mime, $allowedMimes)) {
-        throw new RuntimeException('Formato de imagen inválido. Solo se admiten archivos JPG, PNG y WEBP.');
+    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+    if (!isset($allowed[$mime])) {
+        throw new RuntimeException('Formato de imagen inválido. Solo se admiten JPG, PNG y WEBP.');
     }
-
-    $ext = $allowedMimes[$mime];
     $uploadDir = dirname(__DIR__) . '/assets/' . $targetSubdir;
     if (!is_dir($uploadDir)) {
         mkdir($uploadDir, 0755, true);
-        // Crear .htaccess en uploads para impedir ejecución directa de scripts
-        file_put_contents($uploadDir . '/.htaccess', "SetHandler default-handler\nphp_flag engine off\n");
+        file_put_contents($uploadDir . '/.htaccess', "SetHandler default-handler\nphp_flag engine off\nOptions -Indexes\n");
     }
-
-    $fileName = 'bici_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
+    $fileName = 'ebike_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.' . $allowed[$mime];
     $destination = $uploadDir . '/' . $fileName;
-
     if (!move_uploaded_file($file['tmp_name'], $destination)) {
         throw new RuntimeException('No se pudo guardar la fotografía en el servidor.');
     }
-
     return 'assets/' . $targetSubdir . '/' . $fileName;
 }
 
+function handle_safe_uploads(array $files, int $max = 4): array
+{
+    $paths = [];
+    $list = $files['name'] ?? null;
+    if (!is_array($list)) {
+        $path = handle_safe_upload($files);
+        return $path ? [$path] : [];
+    }
+    for ($i = 0; $i < min($max, count($list)); $i++) {
+        $file = [
+            'name' => $files['name'][$i], 'type' => $files['type'][$i],
+            'tmp_name' => $files['tmp_name'][$i], 'error' => $files['error'][$i],
+            'size' => $files['size'][$i],
+        ];
+        $path = handle_safe_upload($file);
+        if ($path) $paths[] = $path;
+    }
+    return $paths;
+}
+
 /* =========================================================================
-   CONFIGURACIÓN GENERAL
+   CONFIGURACIÓN DE LA EMPRESA
    ========================================================================= */
 function get_workshop_config(PDO $pdo): array
 {
     static $config = null;
     if ($config !== null) return $config;
+    $defaults = [
+        'nombre_empresa' => 'eBike · Movilidad Eléctrica',
+        'nombre_taller' => 'eBike · Movilidad Eléctrica',
+        'nit' => '901.845.123-4',
+        'telefono' => '+57 310 987 6543',
+        'email' => 'contacto@ebike.local',
+        'direccion' => 'Bogotá, Colombia',
+        'moneda' => 'COP',
+        'simbolo_moneda' => '$',
+        'horario_atencion' => 'Lun a Dom · 8:00 a 20:00',
+        'politica_alquiler' => 'Cancelación gratuita hasta 2 horas antes del inicio.',
+        'deposito_garantia' => '0',
+        'garantia_dias' => '90',
+    ];
     try {
-        $rows = $pdo->query("SELECT clave, valor FROM configuracion_taller")->fetchAll();
-        $config = [];
-        foreach ($rows as $r) {
-            $config[$r['clave']] = $r['valor'];
-        }
-        return $config;
+        $rows = $pdo->query('SELECT clave, valor FROM configuracion_taller')->fetchAll();
+        foreach ($rows as $row) $defaults[$row['clave']] = $row['valor'];
     } catch (Throwable) {
-        return [];
+        // Se usan los valores por defecto si la tabla aún no existe.
     }
+    $config = $defaults;
+    return $config;
+}
+
+function company_name(PDO $pdo): string
+{
+    $cfg = get_workshop_config($pdo);
+    return (string)($cfg['nombre_empresa'] ?? $cfg['nombre_taller'] ?? 'eBike');
 }

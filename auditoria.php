@@ -11,8 +11,8 @@ $where = [];
 $params = [];
 
 if ($search !== '') {
-    $where[] = "(l.accion LIKE ? OR l.detalles LIKE ? OR CAST(l.id_manten AS CHAR) LIKE ? OR e.nombre LIKE ? OR u.nombre LIKE ?)";
-    for ($i = 0; $i < 5; $i++) $params[] = "%$search%";
+    $where[] = "(l.accion LIKE ? OR l.detalles LIKE ? OR l.entidad_tipo LIKE ? OR CAST(l.entidad_id AS CHAR) LIKE ? OR e.nombre LIKE ? OR u.nombre LIKE ?)";
+    for ($i = 0; $i < 6; $i++) $params[] = "%$search%";
 }
 
 $sql = "
@@ -41,8 +41,8 @@ include __DIR__ . '/partials/header.php';
 <div class="hero">
   <div>
     <span class="eyebrow">TRAZABILIDAD & SEGURIDAD</span>
-    <h1>Auditoría y Registro de Actividad</h1>
-    <p>Historial inmutable de eventos, cambios de estado, asignaciones, transacciones y modificaciones operativas en el taller.</p>
+    <h1>Auditoría de la operación</h1>
+    <p>Historial de alquileres, incidencias, mantenimiento interno, flota, pagos y accesos.</p>
   </div>
 </div>
 
